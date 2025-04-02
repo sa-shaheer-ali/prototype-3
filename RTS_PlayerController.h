@@ -49,6 +49,7 @@ protected:
     // Input functions
     void OnLeftMouseButtonPressed();
     void OnLeftMouseButtonReleased();
+    void OnLeftMouseButtonHeld();
     void OnRightMouseButtonPressed();
 
     // Helper functions

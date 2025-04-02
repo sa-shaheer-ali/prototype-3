@@ -20,15 +20,15 @@ AUnit::AUnit()
     MovementComponent = CreateDefaultSubobject<UFloatingPawnMovement>(TEXT("MovementComponent"));
     MovementComponent->UpdatedComponent = RootComponent;
     
-    // Set movement parameters
-    MovementSpeed = 300.0f;
-    RotationSpeed = 10.0f;
+    // Set movement parameters for smoother movement
+    MovementSpeed = 400.0f;  // Increased base speed
+    RotationSpeed = 8.0f;    // Slightly reduced for smoother rotation
     AcceptanceRadius = 50.0f;
-    AvoidanceRadius = 200.0f;  // Increased for earlier avoidance
+    AvoidanceRadius = 150.0f;  // Reduced to prevent units from spreading too much
     
     MovementComponent->MaxSpeed = MovementSpeed;
-    MovementComponent->Acceleration = MovementSpeed * 4;  // Increased for more responsive movement
-    MovementComponent->Deceleration = MovementSpeed * 4;
+    MovementComponent->Acceleration = MovementSpeed * 2;  // Reduced for smoother acceleration
+    MovementComponent->Deceleration = MovementSpeed * 2;  // Reduced for smoother deceleration
     MovementComponent->bConstrainToPlane = true;
     MovementComponent->SetPlaneConstraintNormal(FVector(0, 0, 1));
 
@@ -77,6 +77,7 @@ void AUnit::Tick(float DeltaTime)
 
     if (bIsMoving)
     {
+        UE_LOG(LogTemp, Warning, TEXT("%s is moving towards %s"), *GetName(), *TargetDestination.ToString());
         UpdateMovement(DeltaTime);
     }
 }
@@ -86,6 +87,10 @@ void AUnit::SetDestination(const FVector& NewDestination)
     TargetDestination = NewDestination;
     bIsMoving = true;
     StuckTime = 0.0f;
+
+    MovementComponent->Activate(true);  // ✅ Ensure movement is active
+
+    UE_LOG(LogTemp, Warning, TEXT("%s received move command to %s"), *GetName(), *TargetDestination.ToString());
 }
 
 void AUnit::UpdateMovement(float DeltaTime)
@@ -93,16 +98,25 @@ void AUnit::UpdateMovement(float DeltaTime)
     if (HasReachedDestination())
     {
         bIsMoving = false;
+        MovementComponent->StopMovementImmediately();
         return;
     }
 
     FVector CurrentLocation = GetActorLocation();
+    FVector DirectionToTarget = (TargetDestination - CurrentLocation).GetSafeNormal();
     
     // Check if unit is stuck
     float MovedDistance = FVector::Distance(CurrentLocation, LastLocation);
     if (MovedDistance < 1.0f && bIsMoving)
     {
         StuckTime += DeltaTime;
+        if (StuckTime > 1.0f)  // If stuck for more than 1 second
+        {
+            // Add a small random offset to help unstuck
+            DirectionToTarget += FVector(FMath::RandRange(-0.3f, 0.3f), FMath::RandRange(-0.3f, 0.3f), 0);
+            DirectionToTarget.Normalize();
+            StuckTime = 0.0f;  // Reset stuck time
+        }
     }
     else
     {
@@ -110,85 +124,47 @@ void AUnit::UpdateMovement(float DeltaTime)
     }
     LastLocation = CurrentLocation;
 
-    // Calculate base direction to target
-    FVector DirectionToTarget = (TargetDestination - CurrentLocation).GetSafeNormal();
-    
-    // Get all nearby units for avoidance
+    // Get nearby units for avoidance
     TArray<AActor*> NearbyUnits;
     UGameplayStatics::GetAllActorsOfClass(GetWorld(), AUnit::StaticClass(), NearbyUnits);
-    
+
     FVector AvoidanceVector = FVector::ZeroVector;
     int32 AvoidCount = 0;
-    
-    // Calculate avoidance vector with improved close-range response
+
     for (AActor* OtherActor : NearbyUnits)
     {
         if (OtherActor != this)
         {
             FVector OtherLocation = OtherActor->GetActorLocation();
             float Distance = FVector::Distance(CurrentLocation, OtherLocation);
-            
+
             if (Distance < AvoidanceRadius)
             {
-                FVector AwayFromOther = (CurrentLocation - OtherLocation);
-                float AvoidanceStrength = 1.0f - (Distance / AvoidanceRadius);
-                
-                // Exponential avoidance strength for closer units
-                AvoidanceStrength = FMath::Pow(AvoidanceStrength, 1.5f);
-                
-                // Extra strength when very close
-                if (Distance < AvoidanceRadius * 0.3f)
-                {
-                    AvoidanceStrength *= 2.0f;
-                }
-                
-                AvoidanceVector += AwayFromOther.GetSafeNormal() * AvoidanceStrength;
+                FVector AwayFromOther = (CurrentLocation - OtherLocation).GetSafeNormal();
+                float AvoidanceStrength = FMath::Square(1.0f - (Distance / AvoidanceRadius));  // Square for more natural avoidance
+
+                AvoidanceVector += AwayFromOther * AvoidanceStrength;
                 AvoidCount++;
             }
         }
     }
-    
-    // Calculate final movement direction with improved blending
+
+    // Blend avoidance with movement direction
     FVector FinalDirection = DirectionToTarget;
     if (AvoidCount > 0)
     {
-        AvoidanceVector = AvoidanceVector / AvoidCount;
-        
-        // Stronger avoidance influence when stuck
-        float AvoidanceInfluence = FMath::Clamp(0.4f + (StuckTime * 0.2f), 0.4f, 0.8f);
-        float TargetInfluence = 1.0f - AvoidanceInfluence;
-        
-        // Add slight randomization when stuck to break symmetry
-        if (StuckTime > 1.0f)
-        {
-            FVector RandomOffset = FVector(
-                FMath::RandRange(-0.2f, 0.2f),
-                FMath::RandRange(-0.2f, 0.2f),
-                0.0f
-            );
-            AvoidanceVector += RandomOffset;
-        }
-        
-        FinalDirection = (DirectionToTarget * TargetInfluence + AvoidanceVector * AvoidanceInfluence).GetSafeNormal();
-        
-        // Add diagonal movement options when stuck
-        if (StuckTime > 0.5f)
-        {
-            FVector RightVector = FVector::CrossProduct(FVector::UpVector, DirectionToTarget);
-            FinalDirection += RightVector * FMath::Sin(StuckTime * 2.0f) * 0.3f;
-            FinalDirection = FinalDirection.GetSafeNormal();
-        }
+        AvoidanceVector /= AvoidCount;
+        // Adjust the blend factor based on how close we are to other units
+        float BlendFactor = FMath::Clamp(AvoidanceVector.Size(), 0.0f, 0.7f);  // Max 70% influence from avoidance
+        FinalDirection = FMath::Lerp(DirectionToTarget, AvoidanceVector, BlendFactor).GetSafeNormal();
     }
-    
-    // Apply movement with increased force when stuck
-    float MovementForce = 1.0f + (StuckTime * 0.5f);
-    MovementForce = FMath::Clamp(MovementForce, 1.0f, 2.0f);
-    AddMovementInput(FinalDirection, MovementForce);
-    
-    // Rotate towards movement direction
+
+    // Apply movement
+    MovementComponent->AddInputVector(FinalDirection * MovementSpeed * DeltaTime);
+
+    // Smooth rotation
     FRotator TargetRotation = FinalDirection.Rotation();
-    FRotator CurrentRotation = GetActorRotation();
-    FRotator NewRotation = FMath::RInterpTo(CurrentRotation, TargetRotation, DeltaTime, RotationSpeed);
+    FRotator NewRotation = FMath::RInterpTo(GetActorRotation(), TargetRotation, DeltaTime, RotationSpeed);
     SetActorRotation(NewRotation);
 }
 

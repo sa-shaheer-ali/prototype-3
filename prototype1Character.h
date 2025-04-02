@@ -11,6 +11,8 @@
 #include "Navigation/PathFollowingComponent.h"
 #include "AIController.h"
 #include "FlowFieldSystem.h"
+#include "Blueprint/UserWidget.h"
+#include "Components/Widget.h"
 
 #include "prototype1Character.generated.h"
 
@@ -63,6 +65,21 @@ class Aprototype1Character : public ACharacter
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* CameraSwitchAction;
 
+	/** Shoot Input Action */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* ShootAction;
+
+	/** Crosshair Widget */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "FPS", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<class UUserWidget> CrosshairWidgetClass;
+
+	UPROPERTY()
+	class UUserWidget* CrosshairWidget;
+
+	/** Shooting range */
+	UPROPERTY(EditDefaultsOnly, Category = "FPS")
+	float ShootRange = 1000.0f;
+
 public:
 	Aprototype1Character();
 	
@@ -96,6 +113,12 @@ protected:
 
 	/** Switch between first and third person camera */
 	void SwitchCamera();
+
+	/** Handle shooting */
+	void Shoot();
+
+	/** Show or hide crosshair based on camera mode */
+	void UpdateCrosshair();
 
 private:
 	// Spawn point restrictions for FPS view

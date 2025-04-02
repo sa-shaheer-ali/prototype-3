@@ -10,7 +10,9 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "NavigationSystem.h"
-
+#include "Blueprint/UserWidget.h"
+#include "DrawDebugHelpers.h"
+#include "GameFramework/DamageType.h"
 
 #include "InputActionValue.h"
 
@@ -87,13 +89,43 @@ void Aprototype1Character::BeginPlay()
     // Initialize flow field
     InitializeFlowField();
 
+    // Set initial input mode based on camera mode
     APlayerController* PC = GetWorld()->GetFirstPlayerController();
     if (PC)
     {
-        PC->bShowMouseCursor = true;
-        PC->bEnableClickEvents = true;
-        PC->bEnableMouseOverEvents = true;
-        PC->SetInputMode(FInputModeGameAndUI()); // Allows both game and UI interaction
+        if (bIsFirstPerson)
+        {
+            // Hide cursor in FPS mode
+            PC->bShowMouseCursor = false;
+            
+            // Set input mode to game only
+            FInputModeGameOnly InputMode;
+            PC->SetInputMode(InputMode);
+        }
+        else
+        {
+            // Show cursor in RTS mode
+            PC->bShowMouseCursor = true;
+            PC->bEnableClickEvents = true;
+            PC->bEnableMouseOverEvents = true;
+            
+            // Set input mode to game and UI
+            FInputModeGameAndUI InputMode;
+            InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+            InputMode.SetHideCursorDuringCapture(false);
+            PC->SetInputMode(InputMode);
+        }
+    }
+
+    // Create crosshair widget if class is set
+    if (CrosshairWidgetClass && IsLocallyControlled())
+    {
+        CrosshairWidget = CreateWidget<UUserWidget>(GetWorld(), CrosshairWidgetClass);
+        if (CrosshairWidget)
+        {
+            CrosshairWidget->AddToViewport();
+            UpdateCrosshair();
+        }
     }
 }
 
@@ -135,6 +167,12 @@ void Aprototype1Character::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 
 		// Camera switching
 		EnhancedInputComponent->BindAction(CameraSwitchAction, ETriggerEvent::Triggered, this, &Aprototype1Character::SwitchCamera);
+
+		// Shooting
+		if (ShootAction)
+		{
+			EnhancedInputComponent->BindAction(ShootAction, ETriggerEvent::Started, this, &Aprototype1Character::Shoot);
+		}
 	}
 	else
 	{
@@ -238,62 +276,52 @@ void Aprototype1Character::Tick(float DeltaTime)
 
 void Aprototype1Character::SwitchCamera()
 {
-	// If trying to switch to FPS view
-	if (!bIsFirstPerson)
-	{
-		// Check if player is near spawn
-		float DistanceFromSpawn = FVector::Distance(GetActorLocation(), SpawnLocation);
-		if (DistanceFromSpawn <= SpawnRadius)
-		{
-			// Allow switching to FPS view
-			bIsFirstPerson = true;
-			FirstPersonCamera->SetActive(true);
-			FollowCamera->SetActive(false);
-			CameraBoom->SetActive(false);
+    // Toggle between first person and third person
+    bIsFirstPerson = !bIsFirstPerson;
 
-			// Configure character for FPS movement
-			GetCharacterMovement()->bOrientRotationToMovement = false;
-			bUseControllerRotationYaw = true;
-			bUseControllerRotationPitch = true;
-			bUseControllerRotationRoll = false;
+    // Get the player controller
+    APlayerController* PC = Cast<APlayerController>(Controller);
+    if (!PC)
+        return;
 
-			// Configure mouse cursor for FPS view
-			if (APlayerController* PC = Cast<APlayerController>(Controller))
-			{
-				PC->bShowMouseCursor = false;
-				PC->SetInputMode(FInputModeGameOnly());
-			}
-		}
-		else
-		{
-			// Show a message to the player
-			if (APlayerController* PC = Cast<APlayerController>(Controller))
-			{
-				PC->ClientMessage(TEXT("You can only switch to FPS view near the spawn point!"));
-			}
-		}
-	}
-	else
-	{
-		// Always allow switching back to RTS view
-		bIsFirstPerson = false;
-		FirstPersonCamera->SetActive(false);
-		FollowCamera->SetActive(true);
-		CameraBoom->SetActive(true);
+    // Activate the appropriate camera and set input mode
+    if (bIsFirstPerson)
+    {
+        FirstPersonCamera->SetActive(true);
+        FollowCamera->SetActive(false);
+        
+        // In first person, we want character rotation to follow controller rotation
+        bUseControllerRotationYaw = true;
+        GetCharacterMovement()->bOrientRotationToMovement = false;
 
-		// Configure character for RTS movement
-		GetCharacterMovement()->bOrientRotationToMovement = true;
-		bUseControllerRotationYaw = false;
-		bUseControllerRotationPitch = false;
-		bUseControllerRotationRoll = false;
+        // Hide cursor in FPS mode
+        PC->bShowMouseCursor = false;
+        
+        // Set input mode to game only (no UI) in FPS mode
+        FInputModeGameOnly InputMode;
+        PC->SetInputMode(InputMode);
+    }
+    else
+    {
+        FirstPersonCamera->SetActive(false);
+        FollowCamera->SetActive(true);
+        
+        // In third person, we don't want character rotation to follow controller rotation
+        bUseControllerRotationYaw = false;
+        GetCharacterMovement()->bOrientRotationToMovement = true;
 
-		// Configure mouse cursor for RTS view
-		if (APlayerController* PC = Cast<APlayerController>(Controller))
-		{
-			PC->bShowMouseCursor = true;
-			PC->SetInputMode(FInputModeGameAndUI());
-		}
-	}
+        // Show cursor in RTS mode
+        PC->bShowMouseCursor = true;
+        
+        // Set input mode to game and UI in RTS mode
+        FInputModeGameAndUI InputMode;
+        InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+        InputMode.SetHideCursorDuringCapture(false);
+        PC->SetInputMode(InputMode);
+    }
+
+    // Update crosshair visibility
+    UpdateCrosshair();
 }
 
 void Aprototype1Character::InitializeFlowField()
@@ -377,21 +405,62 @@ void Aprototype1Character::MoveToLocation(const FVector& Destination)
 
             // Update flow field immediately when setting new target
             UpdateFlowField();
+        }
+    }
+}
 
-            // Draw debug sphere at the destination
-            DrawDebugSphere(GetWorld(), TargetLocation, 50.0f, 12, FColor::Green, false, 2.0f);
-            
-            // Draw a line from current position to target
-            DrawDebugLine(
-                GetWorld(),
-                GetActorLocation(),
-                TargetLocation,
-                FColor::Yellow,
-                false,
-                2.0f,
-                0,
-                2.0f
-            );
+void Aprototype1Character::Shoot()
+{
+    // Only shoot in first person mode
+    if (!bIsFirstPerson)
+        return;
+
+    if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+    {
+        // Get the camera location and forward vector
+        FVector CameraLocation;
+        FRotator CameraRotation;
+        PlayerController->GetPlayerViewPoint(CameraLocation, CameraRotation);
+        FVector ForwardVector = CameraRotation.Vector();
+
+        // Set up trace parameters
+        FHitResult HitResult;
+        FCollisionQueryParams QueryParams;
+        QueryParams.AddIgnoredActor(this);
+        QueryParams.bTraceComplex = true;
+
+        // Calculate end point of the trace
+        FVector EndTrace = CameraLocation + (ForwardVector * ShootRange);
+
+        // Perform line trace
+        bool bHit = GetWorld()->LineTraceSingleByChannel(HitResult, CameraLocation, EndTrace, ECC_Visibility, QueryParams);
+
+        if (bHit)
+        {
+            // Draw debug line to show the shot
+            DrawDebugLine(GetWorld(), CameraLocation, HitResult.Location, FColor::Red, false, 2.0f);
+            DrawDebugPoint(GetWorld(), HitResult.Location, 10.0f, FColor::Red, false, 2.0f);
+        }
+        else
+        {
+            // Draw debug line for misses
+            DrawDebugLine(GetWorld(), CameraLocation, EndTrace, FColor::White, false, 2.0f);
+        }
+    }
+}
+
+void Aprototype1Character::UpdateCrosshair()
+{
+    if (CrosshairWidget)
+    {
+        // Show crosshair only in first person mode
+        if (bIsFirstPerson)
+        {
+            CrosshairWidget->SetVisibility(ESlateVisibility::Visible);
+        }
+        else
+        {
+            CrosshairWidget->SetVisibility(ESlateVisibility::Hidden);
         }
     }
 }

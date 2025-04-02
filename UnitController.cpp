@@ -96,12 +96,11 @@ void AUnitController::UpdateSelection(const FVector2D& CurrentScreenPosition)
 void AUnitController::EndSelection()
 {
     bIsSelecting = false;
-    UpdateSelectedUnits(); // Make sure to update one last time when selection ends
 }
 
 void AUnitController::UpdateSelectedUnits()
 {
-    // First, deselect all previously selected units
+    // First, deselect all currently selected units
     for (AUnit* Unit : SelectedUnits)
     {
         if (Unit)
@@ -115,91 +114,41 @@ void AUnitController::UpdateSelectedUnits()
     TArray<AActor*> FoundUnits;
     UGameplayStatics::GetAllActorsOfClass(GetWorld(), AUnit::StaticClass(), FoundUnits);
 
-    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
-    if (!PC) return;
-
-    // Get the world bounds of our selection box
-    FVector WorldStartPos, WorldStartDir, WorldEndPos, WorldEndDir;
-    PC->DeprojectScreenPositionToWorld(SelectionStart.X, SelectionStart.Y, WorldStartPos, WorldStartDir);
-    PC->DeprojectScreenPositionToWorld(SelectionEnd.X, SelectionEnd.Y, WorldEndPos, WorldEndDir);
-
-    // Perform line traces to get ground points
-    FHitResult HitStart, HitEnd;
-    FCollisionQueryParams QueryParams;
-    QueryParams.bTraceComplex = false;
-
-    GetWorld()->LineTraceSingleByChannel(HitStart, WorldStartPos, WorldStartPos + WorldStartDir * 10000.0f, ECC_Visibility, QueryParams);
-    GetWorld()->LineTraceSingleByChannel(HitEnd, WorldEndPos, WorldEndPos + WorldEndDir * 10000.0f, ECC_Visibility, QueryParams);
-
-    if (!HitStart.bBlockingHit || !HitEnd.bBlockingHit) return;
-
-    // Calculate selection box bounds in world space
-    FVector MinBound(
-        FMath::Min(HitStart.Location.X, HitEnd.Location.X),
-        FMath::Min(HitStart.Location.Y, HitEnd.Location.Y),
-        0.0f
-    );
-    FVector MaxBound(
-        FMath::Max(HitStart.Location.X, HitEnd.Location.X),
-        FMath::Max(HitStart.Location.Y, HitEnd.Location.Y),
-        10000.0f
-    );
-
-    // Check each unit if it's in the selection box using world space
+    // Check each unit if it's in the selection box
     for (AActor* Actor : FoundUnits)
     {
         AUnit* Unit = Cast<AUnit>(Actor);
-        if (Unit)
+        if (Unit && IsUnitInSelectionBox(Unit))
         {
-            FVector UnitLocation = Unit->GetActorLocation();
-            if (UnitLocation.X >= MinBound.X && UnitLocation.X <= MaxBound.X &&
-                UnitLocation.Y >= MinBound.Y && UnitLocation.Y <= MaxBound.Y)
-            {
-                SelectedUnits.Add(Unit);
-                Unit->SetSelected(true);
-            }
+            SelectedUnits.Add(Unit);
+            Unit->SetSelected(true);
         }
     }
 }
 
 bool AUnitController::IsUnitInSelectionBox(const AUnit* Unit) const
 {
-    if (!Unit) return false;
+    if (!Unit)
+        return false;
 
     APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
-    if (!PC) return false;
+    if (!PC)
+        return false;
 
-    // Get the world bounds of our selection box
-    FVector WorldStartPos, WorldStartDir, WorldEndPos, WorldEndDir;
-    PC->DeprojectScreenPositionToWorld(SelectionStart.X, SelectionStart.Y, WorldStartPos, WorldStartDir);
-    PC->DeprojectScreenPositionToWorld(SelectionEnd.X, SelectionEnd.Y, WorldEndPos, WorldEndDir);
-
-    // Perform line traces to get ground points
-    FHitResult HitStart, HitEnd;
-    FCollisionQueryParams QueryParams;
-    QueryParams.bTraceComplex = false;
-
-    GetWorld()->LineTraceSingleByChannel(HitStart, WorldStartPos, WorldStartPos + WorldStartDir * 10000.0f, ECC_Visibility, QueryParams);
-    GetWorld()->LineTraceSingleByChannel(HitEnd, WorldEndPos, WorldEndPos + WorldEndDir * 10000.0f, ECC_Visibility, QueryParams);
-
-    if (!HitStart.bBlockingHit || !HitEnd.bBlockingHit) return false;
-
-    // Calculate selection box bounds in world space
-    FVector MinBound(
-        FMath::Min(HitStart.Location.X, HitEnd.Location.X),
-        FMath::Min(HitStart.Location.Y, HitEnd.Location.Y),
-        0.0f
-    );
-    FVector MaxBound(
-        FMath::Max(HitStart.Location.X, HitEnd.Location.X),
-        FMath::Max(HitStart.Location.Y, HitEnd.Location.Y),
-        10000.0f
-    );
-
-    // Check if unit is within bounds
+    // Get unit's screen position
     FVector UnitLocation = Unit->GetActorLocation();
-    return (UnitLocation.X >= MinBound.X && UnitLocation.X <= MaxBound.X &&
-            UnitLocation.Y >= MinBound.Y && UnitLocation.Y <= MaxBound.Y);
+    FVector2D ScreenLocation;
+    PC->ProjectWorldLocationToScreen(UnitLocation, ScreenLocation);
+
+    // Calculate selection box bounds
+    float Left = FMath::Min(SelectionStart.X, SelectionEnd.X);
+    float Right = FMath::Max(SelectionStart.X, SelectionEnd.X);
+    float Top = FMath::Min(SelectionStart.Y, SelectionEnd.Y);
+    float Bottom = FMath::Max(SelectionStart.Y, SelectionEnd.Y);
+
+    // Check if unit is in box
+    return ScreenLocation.X >= Left && ScreenLocation.X <= Right &&
+           ScreenLocation.Y >= Top && ScreenLocation.Y <= Bottom;
 }
 
 void AUnitController::DrawSelectionBox()
@@ -256,4 +205,4 @@ void AUnitController::MoveSelectedUnitsTo(const FVector& TargetLocation)
             MoveUnitTo(Unit, TargetLocation);
         }
     }
-}
+} 

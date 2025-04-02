@@ -75,6 +75,7 @@ void ARTS_PlayerController::SetupInputComponent()
         // Bind mouse buttons for selection and movement
         EnhancedInputComponent->BindAction(LeftMouseAction, ETriggerEvent::Started, this, &ARTS_PlayerController::OnLeftMouseButtonPressed);
         EnhancedInputComponent->BindAction(LeftMouseAction, ETriggerEvent::Completed, this, &ARTS_PlayerController::OnLeftMouseButtonReleased);
+        EnhancedInputComponent->BindAction(LeftMouseAction, ETriggerEvent::Triggered, this, &ARTS_PlayerController::OnLeftMouseButtonHeld);
         EnhancedInputComponent->BindAction(RightMouseAction, ETriggerEvent::Started, this, &ARTS_PlayerController::OnRightMouseButtonPressed);
 
         // Building controls
@@ -109,6 +110,17 @@ void ARTS_PlayerController::OnLeftMouseButtonReleased()
 
     bIsSelecting = false;
     UnitController->EndSelection();
+}
+
+void ARTS_PlayerController::OnLeftMouseButtonHeld()
+{
+    if (bIsBuildingMode || !UnitController || !bIsSelecting)
+        return;
+
+    // Get current mouse position and update selection
+    FVector2D CurrentMousePos;
+    GetMousePosition(CurrentMousePos.X, CurrentMousePos.Y);
+    UnitController->UpdateSelection(CurrentMousePos);
 }
 
 void ARTS_PlayerController::OnRightMouseButtonPressed()
@@ -221,39 +233,10 @@ void ARTS_PlayerController::DrawSelectionBox()
     FVector2D CurrentMousePos;
     GetMousePosition(CurrentMousePos.X, CurrentMousePos.Y);
 
-    // Draw the selection box using debug lines in world space
-    FVector WorldStart, WorldStartDir;
-    FVector WorldEnd, WorldEndDir;
-    
-    DeprojectScreenPositionToWorld(SelectionStart.X, SelectionStart.Y, WorldStart, WorldStartDir);
-    DeprojectScreenPositionToWorld(CurrentMousePos.X, CurrentMousePos.Y, WorldEnd, WorldEndDir);
-
-    // Perform line traces to find ground points
-    FHitResult HitStart, HitEnd;
-    FCollisionQueryParams QueryParams;
-    QueryParams.bTraceComplex = false;
-
-    GetWorld()->LineTraceSingleByChannel(HitStart, WorldStart, WorldStart + WorldStartDir * 10000.0f, ECC_Visibility, QueryParams);
-    GetWorld()->LineTraceSingleByChannel(HitEnd, WorldEnd, WorldEnd + WorldEndDir * 10000.0f, ECC_Visibility, QueryParams);
-
-    if (HitStart.bBlockingHit && HitEnd.bBlockingHit)
+    // Update UnitController with current mouse position for selection
+    if (UnitController)
     {
-        // Draw debug box in world space
-        FVector BoxCenter = (HitStart.Location + HitEnd.Location) * 0.5f;
-        FVector BoxExtent = (HitEnd.Location - HitStart.Location).GetAbs() * 0.5f;
-        BoxExtent.Z = 100.0f;  // Height of selection box
-
-        DrawDebugBox(
-            GetWorld(),
-            BoxCenter,
-            BoxExtent,
-            FQuat::Identity,
-            FColor::Green,
-            false,
-            -1.0f,
-            0,
-            2.0f
-        );
+        UnitController->UpdateSelection(CurrentMousePos);
     }
 }
 
